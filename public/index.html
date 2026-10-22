@@ -1,18 +1,320 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Stack Attack</title>
-<link rel="stylesheet" href="style.css">
+<meta name="description" content="Stack the blocks as high as you can. Nail perfect drops to keep your width!">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧱</text></svg>">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: #07061a; overflow: hidden; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  body { display: flex; align-items: center; justify-content: center; font-family: "Trebuchet MS", "Segoe UI", system-ui, sans-serif; color: #fff; }
+  #stage { position: relative; height: 100dvh; width: min(100vw, calc(100dvh * 400 / 700)); max-height: 100dvh; box-shadow: 0 0 60px rgba(120, 90, 255, .25); overflow: hidden; }
+  canvas { width: 100%; height: 100%; display: block; }
+  #score { position: absolute; top: calc(14px + env(safe-area-inset-top, 0px)); left: 0; right: 0; text-align: center; font-size: clamp(48px, 14vw, 84px); font-weight: 900; letter-spacing: 2px; text-shadow: 0 0 22px rgba(255,255,255,.5), 0 4px 0 rgba(0,0,0,.3); pointer-events: none; transition: transform .12s; }
+  #score.pop { transform: scale(1.2); }
+  #msg { position: absolute; top: 24%; left: 0; right: 0; text-align: center; font-size: clamp(22px, 7vw, 38px); font-weight: 900; letter-spacing: 3px; color: #ffe86b; text-shadow: 0 0 18px rgba(255, 220, 80, .8), 0 3px 0 rgba(0,0,0,.4); opacity: 0; pointer-events: none; }
+  #msg.show { animation: floatup .9s ease-out forwards; }
+  @keyframes floatup { 0% { opacity: 0; transform: translateY(18px) scale(.7); } 15% { opacity: 1; transform: translateY(0) scale(1.15); } 100% { opacity: 0; transform: translateY(-36px) scale(1); } }
+  #best { position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); left: 14px; font-size: 14px; font-weight: 700; opacity: .75; pointer-events: none; }
+  #mute { position: absolute; top: calc(8px + env(safe-area-inset-top, 0px)); right: 10px; background: rgba(255,255,255,.1); border: 0; color: #fff; font-size: 20px; width: 42px; height: 42px; border-radius: 50%; cursor: pointer; }
+  #overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; background: radial-gradient(circle at 50% 40%, rgba(40, 20, 90, .72), rgba(5, 4, 20, .92)); backdrop-filter: blur(3px); transition: opacity .25s; z-index: 5; }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+  h1 { margin: 0; font-size: clamp(40px, 12vw, 64px); line-height: .95; font-weight: 900; letter-spacing: 2px; background: linear-gradient(90deg, #ff5ec4, #ffd35e, #5effb1, #5ec8ff); -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 4px 0 rgba(0,0,0,.35)); }
+  #sub { margin: 0; font-size: 16px; line-height: 1.45; max-width: 290px; opacity: .85; }
+  #rank { font-size: 20px; font-weight: 800; color: #ffe86b; min-height: 1.2em; }
+  #stats { font-size: 18px; font-weight: 700; min-height: 1.4em; }
+  #play { margin-top: 10px; font: inherit; font-size: 22px; font-weight: 900; letter-spacing: 2px; padding: 14px 40px; border: 0; border-radius: 999px; color: #1a0b3d; background: linear-gradient(135deg, #ffd35e, #ff7ac8); box-shadow: 0 6px 0 #a3418a, 0 10px 30px rgba(255, 122, 200, .4); cursor: pointer; transition: transform .08s, box-shadow .08s; }
+  #play:active { transform: translateY(4px); box-shadow: 0 2px 0 #a3418a, 0 4px 14px rgba(255, 122, 200, .4); }
+  .hint { font-size: 13px; opacity: .55; margin-top: 6px; }
+</style>
 </head>
 <body>
-<main>
-<h1>Stack Attack</h1>
-<p>A neon block-stacking arcade game</p>
-<button id="hello">Say hello</button>
-<p id="out" aria-live="polite"></p>
-</main>
-<script src="script.js"></script>
+<div id="stage">
+  <canvas id="c"></canvas>
+  <div id="best"></div>
+  <button id="mute" aria-label="Toggle sound">🔊</button>
+  <div id="score">0</div>
+  <div id="msg"></div>
+  <div id="overlay">
+    <h1 id="title">STACK<br>ATTACK</h1>
+    <div id="rank"></div>
+    <div id="stats"></div>
+    <p id="sub">Tap to drop each block. Land it perfectly to keep your width — chain perfects to make your tower grow wider!</p>
+    <button id="play">PLAY</button>
+    <div class="hint">Tap · Click · Space</div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const W = 400, H = 700, BH = 28, BASE_W = 170, BASE_Y = H - 110, PERFECT = 6;
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const $ = id => document.getElementById(id);
+  const scoreEl = $('score'), msgEl = $('msg'), overlay = $('overlay'), playBtn = $('play');
+
+  // ---------- storage (safe) ----------
+  let best = 0;
+  try { best = parseInt(localStorage.getItem('stackattack-best') || '0', 10) || 0; } catch (e) {}
+  function saveBest() { try { localStorage.setItem('stackattack-best', String(best)); } catch (e) {} }
+  function renderBest() { $('best').textContent = best ? 'BEST ' + best : ''; }
+  renderBest();
+
+  // ---------- sound ----------
+  let ac = null, muted = false;
+  const SCALE = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21, 24];
+  function beep(freq, dur = 0.12, type = 'square', vol = 0.05) {
+    if (muted) return;
+    try {
+      ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+      if (ac.state === 'suspended') ac.resume();
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.type = type; o.frequency.value = freq;
+      g.gain.setValueAtTime(vol, ac.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + dur);
+      o.connect(g); g.connect(ac.destination);
+      o.start(); o.stop(ac.currentTime + dur);
+    } catch (e) {}
+  }
+  const note = n => 261.63 * Math.pow(2, n / 12);
+  $('mute').addEventListener('click', e => {
+    muted = !muted; e.target.textContent = muted ? '🔇' : '🔊'; e.target.blur();
+  });
+
+  // ---------- resize ----------
+  let scale = 1;
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const r = canvas.getBoundingClientRect();
+    canvas.width = Math.round(r.width * dpr);
+    canvas.height = Math.round(r.height * dpr);
+    scale = canvas.width / W;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---------- state ----------
+  let state = 'ready'; // ready | play | over
+  let blocks, cur, debris, sparks, score, combo, camY, shake, last = performance.now();
+  const stars = Array.from({ length: 70 }, () => ({ x: Math.random() * W, y: Math.random() * H, s: Math.random() * 1.6 + .4, p: Math.random() * .5 + .1 }));
+  const yOf = level => BASE_Y - level * BH;
+  const hueOf = level => (level * 11 + 200) % 360;
+
+  function reset() {
+    blocks = [{ x: (W - BASE_W) / 2, w: BASE_W, hue: hueOf(0), flash: 0 }];
+    debris = []; sparks = []; score = 0; combo = 0; camY = 0; shake = 0;
+    scoreEl.textContent = '0';
+    spawn();
+  }
+  function spawn() {
+    const level = blocks.length, top = blocks[level - 1];
+    const dir = level % 2 ? 1 : -1;
+    cur = { x: dir > 0 ? 0 : W - top.w, w: top.w, dir, hue: hueOf(level) };
+  }
+  const speed = () => Math.min(2.3 + score * 0.07, 7.8);
+
+  function showMsg(t) {
+    msgEl.textContent = t;
+    msgEl.classList.remove('show'); void msgEl.offsetWidth; msgEl.classList.add('show');
+  }
+  function popScore() {
+    scoreEl.textContent = score;
+    scoreEl.classList.add('pop');
+    setTimeout(() => scoreEl.classList.remove('pop'), 110);
+  }
+  function burst(x, y, w, hue) {
+    for (let i = 0; i < 18; i++) {
+      const side = Math.random() < .5 ? x : x + w;
+      sparks.push({ x: side, y: y + Math.random() * BH, vx: (Math.random() - .5) * 5, vy: -Math.random() * 4 - 1, life: 1, hue });
+    }
+  }
+
+  function drop() {
+    if (state !== 'play') return;
+    const level = blocks.length, top = blocks[level - 1], y = yOf(level);
+    const left = Math.max(cur.x, top.x), right = Math.min(cur.x + cur.w, top.x + top.w), ov = right - left;
+    if (ov <= 0) { gameOver(); return; }
+
+    let nb;
+    if (Math.abs(cur.x - top.x) <= PERFECT) {
+      combo++;
+      nb = { x: top.x, w: top.w, hue: cur.hue, flash: 1 };
+      let txt = combo === 1 ? 'PERFECT!' : 'PERFECT x' + combo;
+      if (combo >= 3 && nb.w < BASE_W) {
+        const g = Math.min(10, BASE_W - nb.w);
+        nb.x = Math.max(0, Math.min(W - nb.w - g, nb.x - g / 2)); nb.w += g;
+        txt += '  WIDER!';
+      }
+      score += 1 + combo;
+      burst(nb.x, y, nb.w, cur.hue);
+      showMsg(txt);
+      beep(note(SCALE[Math.min(combo - 1, SCALE.length - 1)]), .18, 'triangle', .09);
+      shake = 4;
+    } else {
+      combo = 0;
+      nb = { x: left, w: ov, hue: cur.hue, flash: 0 };
+      const cutLeft = cur.x < top.x;
+      const cx = cutLeft ? cur.x : right;
+      const cw = cutLeft ? left - cur.x : cur.x + cur.w - right;
+      debris.push({ x: cx, y, w: cw, vy: 0, vx: cutLeft ? -1.2 : 1.2, rot: 0, vr: cutLeft ? -.03 : .03, hue: cur.hue });
+      score += 1;
+      beep(note(-5), .09, 'square', .05);
+    }
+    blocks.push(nb);
+    popScore();
+    spawn();
+  }
+
+  function rank(s) {
+    if (s < 5) return 'Wobbly Rookie 🥴';
+    if (s < 15) return 'Block Apprentice 🧱';
+    if (s < 35) return 'Tower Builder 🏗️';
+    if (s < 70) return 'Skyline Architect 🌆';
+    if (s < 120) return 'Cloud Crusher ☁️';
+    return 'Sky Titan 👑';
+  }
+
+  function gameOver() {
+    state = 'over';
+    const y = yOf(blocks.length);
+    debris.push({ x: cur.x, y, w: cur.w, vy: 0, vx: cur.dir * 1.5, rot: 0, vr: cur.dir * .04, hue: cur.hue });
+    shake = 16;
+    beep(note(-12), .5, 'sawtooth', .08);
+    const isNew = score > best;
+    if (isNew) { best = score; saveBest(); renderBest(); }
+    setTimeout(() => {
+      $('title').innerHTML = 'GAME<br>OVER';
+      $('rank').textContent = rank(score);
+      $('stats').textContent = (isNew && score > 0 ? '🎉 NEW BEST: ' : 'Score: ') + score + (isNew ? '' : '  ·  Best: ' + best);
+      $('sub').style.display = 'none';
+      playBtn.textContent = 'TRY AGAIN';
+      overlay.classList.remove('hidden');
+      playBtn.focus({ preventScroll: true });
+    }, 650);
+  }
+
+  function start() {
+    if (state === 'play') return;
+    reset();
+    state = 'play';
+    overlay.classList.add('hidden');
+    playBtn.blur();
+    beep(note(7), .1, 'triangle', .07);
+  }
+  playBtn.addEventListener('click', start);
+
+  // ---------- input ----------
+  $('stage').addEventListener('pointerdown', e => {
+    if (e.target.closest('button')) return;
+    drop();
+  });
+  window.addEventListener('keydown', e => {
+    if (e.code === 'Space' || e.key === ' ') {
+      if (state === 'play') { e.preventDefault(); drop(); }
+    }
+  });
+
+  // ---------- render ----------
+  function rr(x, y, w, h, r) {
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h);
+  }
+  function drawBlock(x, y, w, hue, flash = 0, alpha = 1) {
+    const g = ctx.createLinearGradient(0, y, 0, y + BH);
+    g.addColorStop(0, `hsl(${hue} 90% 68%)`);
+    g.addColorStop(1, `hsl(${hue} 80% 46%)`);
+    ctx.globalAlpha = alpha;
+    ctx.shadowColor = `hsl(${hue} 95% 60%)`; ctx.shadowBlur = 16;
+    ctx.fillStyle = g; rr(x, y, w, BH - 2, 6); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(255,255,255,.3)'; rr(x + 5, y + 3, Math.max(0, w - 10), 4, 2); ctx.fill();
+    if (flash > 0) { ctx.fillStyle = `rgba(255,255,255,${flash * .75})`; rr(x, y, w, BH - 2, 6); ctx.fill(); }
+    ctx.globalAlpha = 1;
+  }
+
+  function update(dt) {
+    if (state === 'play') {
+      cur.x += cur.dir * speed() * dt;
+      if (cur.x < 0) { cur.x = 0; cur.dir = 1; }
+      if (cur.x + cur.w > W) { cur.x = W - cur.w; cur.dir = -1; }
+    }
+    const target = Math.max(0, blocks.length - 6) * BH;
+    camY += (target - camY) * 0.08 * dt;
+    for (const b of blocks) if (b.flash > 0) b.flash = Math.max(0, b.flash - 0.06 * dt);
+    for (const d of debris) { d.vy += 0.45 * dt; d.y += d.vy * dt; d.x += d.vx * dt; d.rot += d.vr * dt; }
+    debris = debris.filter(d => d.y < yOf(0) + camY + H);
+    for (const s of sparks) { s.vy += 0.18 * dt; s.x += s.vx * dt; s.y += s.vy * dt; s.life -= 0.028 * dt; }
+    sparks = sparks.filter(s => s.life > 0);
+    if (shake > 0) shake = Math.max(0, shake - 0.8 * dt);
+  }
+
+  function render(now) {
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    const lvl = blocks.length;
+    const hb = (230 + lvl * 3) % 360;
+    const bg = ctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, `hsl(${hb} 60% 9%)`);
+    bg.addColorStop(1, `hsl(${(hb + 50) % 360} 70% 24%)`);
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+
+    // stars with parallax
+    ctx.fillStyle = '#fff';
+    for (const s of stars) {
+      const y = ((s.y + camY * s.p) % H + H) % H;
+      ctx.globalAlpha = .35 + .35 * Math.sin(now / 700 + s.x);
+      ctx.fillRect(s.x, y, s.s, s.s);
+    }
+    ctx.globalAlpha = 1;
+
+    const sx = shake ? (Math.random() - .5) * shake : 0, sy = shake ? (Math.random() - .5) * shake : 0;
+    ctx.save();
+    ctx.translate(sx, camY + sy);
+
+    // ground glow
+    const gg = ctx.createLinearGradient(0, BASE_Y + BH, 0, BASE_Y + BH + 200);
+    gg.addColorStop(0, 'rgba(255,255,255,.12)'); gg.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = gg; ctx.fillRect(0, BASE_Y + BH - 2, W, 400);
+
+    blocks.forEach((b, i) => drawBlock(b.x, yOf(i), b.w, b.hue, b.flash));
+    if (state === 'play') {
+      drawBlock(cur.x, yOf(blocks.length), cur.w, cur.hue);
+      // guide line
+      const top = blocks[blocks.length - 1];
+      ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.setLineDash([4, 6]);
+      ctx.beginPath(); ctx.moveTo(top.x, yOf(blocks.length) + BH); ctx.lineTo(top.x, yOf(blocks.length) - 60);
+      ctx.moveTo(top.x + top.w, yOf(blocks.length) + BH); ctx.lineTo(top.x + top.w, yOf(blocks.length) - 60);
+      ctx.stroke(); ctx.setLineDash([]);
+    }
+
+    for (const d of debris) {
+      ctx.save();
+      ctx.translate(d.x + d.w / 2, d.y + BH / 2); ctx.rotate(d.rot);
+      drawBlock(-d.w / 2, -BH / 2, d.w, d.hue, 0, .9);
+      ctx.restore();
+    }
+    for (const s of sparks) {
+      ctx.globalAlpha = Math.max(0, s.life);
+      ctx.fillStyle = `hsl(${s.hue} 100% 80%)`;
+      ctx.beginPath(); ctx.arc(s.x, s.y, 2.6, 0, 6.283); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  function loop(now) {
+    const dt = Math.min((now - last) / 16.667, 3);
+    last = now;
+    update(dt);
+    render(now);
+    requestAnimationFrame(loop);
+  }
+
+  reset();
+  requestAnimationFrame(loop);
+})();
+</script>
 </body>
 </html>
